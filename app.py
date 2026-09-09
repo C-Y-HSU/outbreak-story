@@ -5,16 +5,16 @@ import streamlit as st
 
 st.title("🏥 群聚事件管理系統 - 指標個案追蹤與隔離")
 st.write(
-    "以群聚事件為單位，管理確診者日誌，並可指定與醒目展示該事件的「指標個案」。"
+    "以群聚事件為單位，管理個案日誌，並可指定與醒目展示該事件的「指標個案」。"
 )
 
 # 定義儲存資料的檔案名稱
 DATA_FILE = "outbreak_logs.csv"
 
-# 定義標準欄位順序（加入「指標個案」欄位）
+# 定義標準欄位順序
 DESIRED_COLS = [
     "事件名稱",
-    "指標個案",  # 用來標記是否為指標個案 ("⭐ 指標個案" 或 "")
+    "指標個案",
     "發生日期",
     "姓名",
     "性別",
@@ -26,10 +26,21 @@ DESIRED_COLS = [
 ]
 
 
-# 載入現有資料，並強制規範欄位順序
+# 載入現有資料，並強化欄位與型態檢查
 def load_data():
   if os.path.exists(DATA_FILE):
     df = pd.read_csv(DATA_FILE)
+
+    # 如果舊 CSV 缺少「指標個案」或「事件名稱」欄位，自動補上
+    if "指標個案" not in df.columns:
+      df["指標個案"] = ""
+    if "事件名稱" not in df.columns:
+      df["事件名稱"] = "未命名群聚事件"
+
+    # 強制將指標個案欄位轉為字串，避免型態錯誤
+    df["指標個案"] = df["指標個案"].fillna("").astype(str)
+    df["事件名稱"] = df["事件名稱"].fillna("未命名群聚事件").astype(str)
+
     existing_cols = [col for col in DESIRED_COLS if col in df.columns]
     other_cols = [col for col in df.columns if col not in DESIRED_COLS]
     return df[existing_cols + other_cols]
@@ -79,10 +90,11 @@ else:
 # ==========================================
 st.markdown("---")
 if not df_current_event.empty and "指標個案" in df_current_event.columns:
-  index_cases = df_current_event[df_current_event["指標個案"] == "⭐ 指標個案"]
+  index_cases = df_current_event[
+      df_current_event["指標個案"].str.contains("指標個案", na=False)
+  ]
 
   if not index_cases.empty:
-    # 如果有找到指標個案，用醒目的成功框 (Success Box) 置頂展示
     ic = index_cases.iloc[0]
     st.success(
         f"### 🌟 【{selected_event}】之官方認定指標個案\n"
@@ -130,7 +142,7 @@ with st.expander("➕ 點此展開表單：新增確診者資料"):
 
         new_data = pd.DataFrame([{
             "事件名稱": selected_event,
-            "指標個案": "",  # 新增時預設不是指標個案
+            "指標個案": "",
             "發生日期": str(case_date),
             "姓名": name,
             "性別": gender,
@@ -161,9 +173,7 @@ st.subheader(f"📋 【{selected_event}】目前的確診個案總日誌")
 if not df_current_event.empty:
   st.dataframe(df_current_event, use_container_width=True)
 
-  # 指定指標個案的互動區塊
   st.markdown("#### ⭐ 設定此事件的指標個案")
-  # 建立選項清單：結合姓名與身分證字號供辨識
   case_options = {
       f"{row['姓名']} ({row['身份證字號']})": idx
       for idx, row in df_current_event.iterrows()
@@ -176,11 +186,11 @@ if not df_current_event.empty:
   if st.button("🌟 確認將此人設為指標個案"):
     target_idx = case_options[selected_case_label]
 
-    # 將同事件的其他個案指標狀態清空，並把這一位設為「⭐ 指標個案」
+    # 安全地更新指定事件的指標個案
+    df_logs["指標個案"] = df_logs["指標個案"].astype(str)
     df_logs.loc[df_logs["事件名稱"] == selected_event, "指標個案"] = ""
     df_logs.loc[target_idx, "指標個案"] = "⭐ 指標個案"
 
-    # 存檔
     df_logs.to_csv(DATA_FILE, index=False, encoding="utf-8-sig")
     st.success(f"✨ 已成功指定【{selected_case_label}】為本群聚事件的指標個案！")
     st.rerun()
@@ -188,6 +198,6 @@ if not df_current_event.empty:
 else:
   st.info(f"事件【{selected_event}】目前尚無個案紀錄，請先展開上方表單新增個案！")
 
-# 管理員縂表
+# 管理員總表
 with st.expander("🔍 管理員視角：檢視所有事件的總合併日誌"):
   st.dataframe(df_logs, use_container_width=True)
