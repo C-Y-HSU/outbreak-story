@@ -31,13 +31,11 @@ def load_data():
   if os.path.exists(DATA_FILE):
     df = pd.read_csv(DATA_FILE)
 
-    # 如果舊 CSV 缺少「指標個案」或「事件名稱」欄位，自動補上
     if "指標個案" not in df.columns:
       df["指標個案"] = ""
     if "事件名稱" not in df.columns:
       df["事件名稱"] = "未命名群聚事件"
 
-    # 強制將指標個案欄位轉為字串，避免型態錯誤
     df["指標個案"] = df["指標個案"].fillna("").astype(str)
     df["事件名稱"] = df["事件名稱"].fillna("未命名群聚事件").astype(str)
 
@@ -78,9 +76,18 @@ if not selected_event:
 st.sidebar.markdown("---")
 st.sidebar.markdown(f"**📌 目前正在處理的事件：**\n### `{selected_event}`")
 
-# 篩選出屬於「當前選定事件」的資料
+# 篩選出屬於「當前選定事件」的資料，並將「指標個案」自動排序置頂
 if not df_logs.empty and "事件名稱" in df_logs.columns:
   df_current_event = df_logs[df_logs["事件名稱"] == selected_event].copy()
+
+  if not df_current_event.empty and "指標個案" in df_current_event.columns:
+    # 建立暫時的排序依據：是指標個案的排在最前面 (True 轉數值會排在前面)
+    df_current_event["_temp_sort"] = df_current_event[
+        "指標個案"
+    ].str.contains("指標個案", na=False)
+    df_current_event = df_current_event.sort_values(
+        by="_temp_sort", ascending=False
+    ).drop(columns=["_temp_sort"])
 else:
   df_current_event = pd.DataFrame(columns=DESIRED_COLS)
 
@@ -171,6 +178,7 @@ st.markdown("---")
 st.subheader(f"📋 【{selected_event}】目前的確診個案總日誌")
 
 if not df_current_event.empty:
+  # 此處顯示的表格，其指標個案已經自動排在最上方
   st.dataframe(df_current_event, use_container_width=True)
 
   st.markdown("#### ⭐ 設定此事件的指標個案")
@@ -186,7 +194,6 @@ if not df_current_event.empty:
   if st.button("🌟 確認將此人設為指標個案"):
     target_idx = case_options[selected_case_label]
 
-    # 安全地更新指定事件的指標個案
     df_logs["指標個案"] = df_logs["指標個案"].astype(str)
     df_logs.loc[df_logs["事件名稱"] == selected_event, "指標個案"] = ""
     df_logs.loc[target_idx, "指標個案"] = "⭐ 指標個案"
