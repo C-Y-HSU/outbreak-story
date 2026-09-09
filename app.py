@@ -5,29 +5,35 @@ import streamlit as st
 
 st.title("🏥 群聚事件管理系統 - 個案核心日誌")
 st.write(
-    "以「確診者」為單位，手動輸入基本資料與群聚事件歷程，並依指定欄位順序排列。"
+    "以「確診者」為單位，手動輸入基本資料與群聚事件歷程，並依指定順序由左至右排列。"
 )
 
 # 定義儲存資料的檔案名稱
 DATA_FILE = "outbreak_logs.csv"
 
+# 定義你要求的標準欄位順序
+DESIRED_COLS = [
+    "發生日期",
+    "姓名",
+    "性別",
+    "生日",
+    "身份證字號",
+    "確診管道",
+    "後續處理",
+    "記錄時間",
+]
 
-# 載入現有資料的函數
+
+# 載入現有資料，並強制規範由左至右的排列順序
 def load_data():
   if os.path.exists(DATA_FILE):
-    return pd.read_csv(DATA_FILE)
+    df = pd.read_csv(DATA_FILE)
+    # 按照 DESIRED_COLS 的順序重新排列欄位（避免舊 CSV 順序錯亂）
+    existing_cols = [col for col in DESIRED_COLS if col in df.columns]
+    other_cols = [col for col in df.columns if col not in DESIRED_COLS]
+    return df[existing_cols + other_cols]
   else:
-    # 按照要求的順序初始化欄位
-    return pd.DataFrame(columns=[
-        "發生日期",
-        "姓名",
-        "性別",
-        "生日",
-        "身份證字號",
-        "確診管道",
-        "後續處理",
-        "記錄時間",
-    ])
+    return pd.DataFrame(columns=DESIRED_COLS)
 
 
 df_logs = load_data()
@@ -47,7 +53,7 @@ with st.form("case_form"):
     gender = st.selectbox("3. 性別", ["男", "女", "其他"])
 
   with col2:
-    # 4. 生日（改為手動輸入文字框，解決萬年曆難選的問題）
+    # 4. 生日（手動輸入文字框）
     birthday = st.text_input(
         "4. 生日（可直接手動輸入，例如：1991-03-08 或 民國80年3月8日）"
     )
@@ -72,29 +78,35 @@ with st.form("case_form"):
     else:
       now_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-      # 嚴格按照指定的欄位順序包裝資料
+      # 包裝新資料
       new_data = pd.DataFrame([{
           "發生日期": str(case_date),
           "姓名": name,
           "性別": gender,
           "生日": birthday,
-          "身份證字號": id_number.upper(),  # 自動轉大寫
+          "身份證字號": id_number.upper(),
           "確診管道": diagnosis_method,
           "後續處理": follow_up_action,
           "記錄時間": now_time,
       }])
 
-      # 串接並存檔
+      # 串接新舊資料
       df_logs = pd.concat([df_logs, new_data], ignore_index=True)
+
+      # 存檔前再次確保欄位順序整齊
+      existing_cols = [col for col in DESIRED_COLS if col in df_logs.columns]
+      other_cols = [col for col in df_logs.columns if col not in DESIRED_COLS]
+      df_logs = df_logs[existing_cols + other_cols]
+
       df_logs.to_csv(DATA_FILE, index=False, encoding="utf-8-sig")
 
       st.success(f"🎉 成功記錄確診者【{name}】的個案日誌！")
 
-# 顯示目前的總日誌表格（會完全對應你要求的欄位順序）
+# 顯示目前的總日誌表格
 st.markdown("---")
 st.subheader("📋 目前累積的確診個案總日誌")
 
 if not df_logs.empty:
   st.dataframe(df_logs, use_container_width=True)
 else:
-  st.info("目前尚無確診個案紀錄，請透過上方表單新增第一筆資料！")
+  st.info("print目前尚無確診個案紀錄，請透過上方表單新增第一筆資料！")
