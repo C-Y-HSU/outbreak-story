@@ -3,9 +3,9 @@ import os
 import pandas as pd
 import streamlit as st
 
-st.title("🏥 群聚事件管理系統 - 批次個案輸入與追蹤")
+st.title("🏥 群聚事件管理系統 - 獨立事件編號與指標追蹤")
 st.write(
-    "支援多事件隔離、指標個案置頂、事件結案封存，以及針對大量個案的「批次快速輸入」功能。"
+    "支援多事件獨立編號、指標個案置頂、事件結案封存，以及批次個案輸入功能。"
 )
 
 # 定義儲存資料的檔案名稱
@@ -294,7 +294,7 @@ else:
                     row.get("發生日期", datetime.today().strftime("%Y-%m-%d"))
                 ),
                 "姓名": name_val,
-                "性別": str(row.get("性別", "男")),
+                "性別": str(row.get("性别", "男")),
                 "生日": str(row.get("生日", "")),
                 "身份證字號": id_val.upper(),
                 "確診管道": str(row.get("確診管道", "")),
@@ -340,16 +340,21 @@ st.markdown("---")
 st.subheader(f"📋 【{selected_event}】目前的確診個案總日誌")
 
 if not df_current_event.empty:
-  st.dataframe(df_current_event, use_container_width=True)
+  # 【修正處 1】：將顯示的表格建立獨立從 1 開始的流水編號索引，讓畫面看起來乾淨俐落
+  df_display = df_current_event.reset_index(drop=True).copy()
+  df_display.index = df_display.index + 1
+  st.dataframe(df_display, use_container_width=True)
 
   if current_status != "已結案":
     st.markdown("#### ⭐ 設定此事件的指標個案")
 
-    # 【修正處】：在選項文字前方加上資料庫的行索引編號 [idx]，確保每個選項絕對唯一，不會被覆蓋
-    case_options = {
-        f"[編號 {idx}] {row['姓名']} ({row['身份證字號']})": idx
-        for idx, row in df_current_event.iterrows()
-    }
+    # 【修正處 2】：用 enumerate 產生每個事件專屬、從 1 開始的獨立編號 (1, 2, 3...)
+    case_options = {}
+    for local_num, (idx, row) in enumerate(
+        df_current_event.iterrows(), start=1
+    ):
+      label = f"個案編號 {local_num}：{row['姓名']} ({row['身份證字號']})"
+      case_options[label] = idx
 
     selected_case_label = st.selectbox(
         "選擇要設為指標個案的確診者", list(case_options.keys())
