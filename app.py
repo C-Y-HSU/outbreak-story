@@ -230,7 +230,6 @@ else:
           st.rerun()
 
   else:
-    # 批次網格輸入模式
     st.subheader(f"📦 批次快速輸入（事件：{selected_event}）")
     st.info(
         "💡 提示：您可以直接在下方表格中連續輸入多筆資料（支援多行新增）。輸入完畢後點擊下方按鈕即可一鍵全部存入！"
@@ -304,7 +303,6 @@ else:
             })
             valid_rows_added += 1
 
-        # 【修正處】：將原本的 new_rows_list > 0 改為 len(new_rows_list) > 0
         if len(new_rows_list) > 0:
           df_new_batch = pd.DataFrame(new_rows_list)
           df_logs = pd.concat([df_logs, df_new_batch], ignore_index=True)
@@ -346,8 +344,10 @@ if not df_current_event.empty:
 
   if current_status != "已結案":
     st.markdown("#### ⭐ 設定此事件的指標個案")
+
+    # 【修正處】：在選項文字前方加上資料庫的行索引編號 [idx]，確保每個選項絕對唯一，不會被覆蓋
     case_options = {
-        f"{row['姓名']} ({row['身份證字號']})": idx
+        f"[編號 {idx}] {row['姓名']} ({row['身份證字號']})": idx
         for idx, row in df_current_event.iterrows()
     }
 
