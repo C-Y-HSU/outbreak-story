@@ -3,9 +3,9 @@ import os
 import pandas as pd
 import streamlit as st
 
-st.title("🏥 群聚事件管理系統 - 獨立事件編號與指標追蹤")
+st.title("🏥 群聚事件管理系統 - 個案維護與追蹤")
 st.write(
-    "支援多事件獨立編號、指標個案置頂、事件結案封存，以及批次個案輸入功能。"
+    "支援多事件獨立編號、指標個案置頂、事件結案封存，以及個案的「批次輸入」與「修改刪除」功能。"
 )
 
 # 定義儲存資料的檔案名稱
@@ -294,7 +294,7 @@ else:
                     row.get("發生日期", datetime.today().strftime("%Y-%m-%d"))
                 ),
                 "姓名": name_val,
-                "性別": str(row.get("性别", "男")),
+                "性別": str(row.get("性別", "男")),
                 "生日": str(row.get("生日", "")),
                 "身份證字號": id_val.upper(),
                 "確診管道": str(row.get("確診管道", "")),
@@ -334,21 +334,22 @@ else:
 
 
 # ==========================================
-# 主畫面 2：目前事件的總日誌表格與「指定指標個案」功能
+# 主畫面 2：目前事件的總日誌表格與操作區
 # ==========================================
 st.markdown("---")
 st.subheader(f"📋 【{selected_event}】目前的確診個案總日誌")
 
 if not df_current_event.empty:
-  # 【修正處 1】：將顯示的表格建立獨立從 1 開始的流水編號索引，讓畫面看起來乾淨俐落
+  # 顯示帶有獨立 1, 2, 3... 編號的表格
   df_display = df_current_event.reset_index(drop=True).copy()
   df_display.index = df_display.index + 1
   st.dataframe(df_display, use_container_width=True)
 
   if current_status != "已結案":
+    # ------------------------------------------
+    # 子功能 A：設定指標個案
+    # ------------------------------------------
     st.markdown("#### ⭐ 設定此事件的指標個案")
-
-    # 【修正處 2】：用 enumerate 產生每個事件專屬、從 1 開始的獨立編號 (1, 2, 3...)
     case_options = {}
     for local_num, (idx, row) in enumerate(
         df_current_event.iterrows(), start=1
@@ -357,7 +358,9 @@ if not df_current_event.empty:
       case_options[label] = idx
 
     selected_case_label = st.selectbox(
-        "選擇要設為指標個案的確診者", list(case_options.keys())
+        "選擇要設為指標個案的確診者",
+        list(case_options.keys()),
+        key="index_select",
     )
 
     if st.button("🌟 確認將此人設為指標個案"):
@@ -370,8 +373,94 @@ if not df_current_event.empty:
       df_logs.to_csv(DATA_FILE, index=False, encoding="utf-8-sig")
       st.success(f"✨ 已成功指定【{selected_case_label}】為本群聚事件的指標個案！")
       st.rerun()
+
+    # ------------------------------------------
+    # 子功能 B：修改或刪除現有個案資料（新增！）
+    # ------------------------------------------
+    st.markdown("---")
+    st.markdown("#### ✏️ 修改或刪除現有個案資料")
+
+    edit_options = {}
+    for local_num, (idx, row) in enumerate(df_current_event.iterrows(), start=1):
+      label = f"個案編號 {local_num}：{row['姓名']} ({row['身份證字號']})"
+      edit_options[label] = idx
+
+    selected_edit_label = st.selectbox(
+        "選擇要修改或刪除的個案", list(edit_options.keys()), key="edit_select"
+    )
+
+    if selected_edit_label:
+      target_idx = edit_options[selected_edit_label]
+      target_row = df_logs.loc[target_idx]
+
+      with st.form("edit_case_form"):
+        st.markdown(
+            f"正在編輯：**{target_row['姓名']}** （身分證："
+            f"`{target_row['身份證字號']}`）"
+        )
+
+        try:
+          default_date = datetime.strptime(
+              str(target_row["發生日期"]), "%Y-%m-%d"
+          ).date()
+        except:
+          default_date = datetime.today().date()
+
+        edit_case_date = st.date_input("1. 發生日期", value=default_date)
+
+        col_e1, col_e2 = st.columns(2)
+        with col_e1:
+          edit_name = st.text_input("2. 姓名", value=str(target_row["姓名"]))
+          genders = ["男", "女", "其他"]
+          current_g = str(target_row["性別"])
+          g_idx = genders.index(current_g) if current_g in genders else 0
+          edit_gender = st.selectbox("3. 性別", genders, index=g_idx)
+        with col_e2:
+          edit_birthday = st.text_input("4. 生日", value=str(target_row["生日"]))
+          edit_id = st.text_input(
+              "5. 身份證字號", value=str(target_row["身份證字號"])
+          )
+
+        edit_diag = st.text_input(
+            "6. 確診管道", value=str(target_row["確診管道"])
+        )
+        edit_follow = st.text_area(
+            "7. 後續處理", value=str(target_row["後續處理"])
+        )
+
+        col_sub1, col_sub2 = st.columns(2)
+        with col_sub1:
+          update_submitted = st.form_submit_button("💾 儲存修改")
+        with col_sub2:
+          delete_submitted = st.form_submit_button("🗑️ 刪除此個案")
+
+        if update_submitted:
+          if not edit_name or not edit_id:
+            st.warning("⚠️ 請務必填寫「姓名」與「身份證字號」！")
+          else:
+            df_logs.loc[target_idx, "發生日期"] = str(edit_case_date)
+            df_logs.loc[target_idx, "姓名"] = edit_name
+            df_logs.loc[target_idx, "性別"] = edit_gender
+            df_logs.loc[target_idx, "生日"] = edit_birthday
+            df_logs.loc[target_idx, "身份證字號"] = edit_id.upper()
+            df_logs.loc[target_idx, "確診管道"] = edit_diag
+            df_logs.loc[target_idx, "後續處理"] = edit_follow
+
+            df_logs.to_csv(DATA_FILE, index=False, encoding="utf-8-sig")
+            st.success(f"✨ 成功更新個案【{edit_name}】的資料！")
+            st.rerun()
+
+        if delete_submitted:
+          deleted_name = target_row["姓名"]
+          deleted_id = target_row["身份證字號"]
+          # 如果被刪除的剛好是指標個案，順便清空標記
+          df_logs = df_logs.drop(target_idx).reset_index(drop=True)
+          df_logs.to_csv(DATA_FILE, index=False, encoding="utf-8-sig")
+          st.success(f"🗑️ 已成功刪除個案【{deleted_name} ({deleted_id})】！")
+          st.rerun()
+
   else:
-    st.info("🔒 此事件已結案，無法再變更指標個案。")
+    st.info("🔒 此事件已結案，無法再變更或刪除個案。")
 
 else:
   st.info(f"事件【{selected_event}】目前尚無個案紀錄！")
