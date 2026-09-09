@@ -3,7 +3,7 @@ import os
 import pandas as pd
 import streamlit as st
 
-st.title("🏥 群聚事件管理系統 - 個案核心日誌")
+st.title("🏥 臺北市立浩然敬老院群聚事件管理系統 - 個案核心日誌")
 st.write(
     "以「確診者」為單位，手動輸入基本資料與群聚事件歷程，並依指定順序由左至右排列。"
 )
