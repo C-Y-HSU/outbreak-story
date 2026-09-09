@@ -3,18 +3,18 @@ import os
 import pandas as pd
 import streamlit as st
 
-st.title("🏥 群聚事件管理系統 - 事件存檔與結案機制")
+st.title("🏥 群聚事件管理系統 - 批次個案輸入與追蹤")
 st.write(
-    "以群聚事件為單位，支援指標個案置頂、新增個案，以及事件結案與歷史封存管理。"
+    "支援多事件隔離、指標個案置頂、事件結案封存，以及針對大量個案的「批次快速輸入」功能。"
 )
 
 # 定義儲存資料的檔案名稱
 DATA_FILE = "outbreak_logs.csv"
 
-# 定義標準欄位順序（新增「事件狀態」欄位）
+# 定義標準欄位順序
 DESIRED_COLS = [
     "事件名稱",
-    "事件狀態",  # "進行中" 或 "已結案"
+    "事件狀態",
     "指標個案",
     "發生日期",
     "姓名",
@@ -32,7 +32,6 @@ def load_data():
   if os.path.exists(DATA_FILE):
     df = pd.read_csv(DATA_FILE)
 
-    # 自動補齊可能缺少的新欄位
     if "事件名稱" not in df.columns:
       df["事件名稱"] = "未命名群聚事件"
     if "事件狀態" not in df.columns:
@@ -58,7 +57,6 @@ df_logs = load_data()
 # ==========================================
 st.sidebar.header("📁 事件管理與結案中心")
 
-# 取得所有事件及其對應的狀態
 if not df_logs.empty and "事件名稱" in df_logs.columns:
   event_status_map = (
       df_logs.drop_duplicates(subset=["事件名稱"])
@@ -80,9 +78,7 @@ event_mode = st.sidebar.radio("請選擇操作模式", ["進行中事件", "新�
 
 selected_event = ""
 if event_mode == "進行中事件":
-  # 讓使用者選擇是否要檢視已結案的事件
   view_closed = st.sidebar.checkbox("📂 顯示已結案的歷史事件")
-
   target_list = (
       (active_events + closed_events) if view_closed else active_events
   )
@@ -99,7 +95,6 @@ else:
 if not selected_event:
   selected_event = "未命名群聚事件"
 
-# 取得當前事件的狀態
 current_status = event_status_map.get(selected_event, "進行中")
 
 st.sidebar.markdown("---")
@@ -109,7 +104,6 @@ if current_status == "已結案":
 else:
   st.sidebar.success("🔥 狀態：進行中")
 
-# 結案／重新啟動控制按鈕
 if not df_logs.empty and selected_event in event_status_map:
   st.sidebar.markdown("---")
   if current_status == "進行中":
@@ -125,7 +119,7 @@ if not df_logs.empty and selected_event in event_status_map:
       st.sidebar.success("已成功重新啟動此事件！")
       st.rerun()
 
-# 篩選出屬於「當前選定事件」的資料，並將指標個案置頂
+# 篩選當前事件資料，並將指標個案置頂
 if not df_logs.empty and "事件名稱" in df_logs.columns:
   df_current_event = df_logs[df_logs["事件名稱"] == selected_event].copy()
 
@@ -165,7 +159,7 @@ if not df_current_event.empty and "指標個案" in df_current_event.columns:
 
 
 # ==========================================
-# 主畫面 1：新增該事件的確診者資料（若已結案則鎖定）
+# 主畫面 1：新增個案模式選擇（單筆 vs 批次網格輸入）
 # ==========================================
 if current_status == "已結案":
   st.warning(
@@ -173,9 +167,15 @@ if current_status == "已結案":
       "重新啟動此事件」。"
   )
 else:
-  with st.expander("➕ 點此展開表單：新增確診者資料"):
+  input_mode = st.radio(
+      "📥 選擇個案輸入方式", ["✍️ 單筆詳細輸入", "📦 批次快速輸入（Excel 網格）"],
+      horizontal=True
+  )
+
+  if input_mode == "✍️ 單筆詳細輸入":
     with st.form("case_form"):
-      case_date = st.date_input("1. 發生日期")
+      st.subheader(f"📝 單筆新增確診者（事件：{selected_event}）")
+      case_date = st.date_input("1. 發生日期", value=datetime.today())
 
       col1, col2 = st.columns(2)
       with col1:
@@ -228,6 +228,114 @@ else:
               f"🎉 成功將確診者【{name}】記錄至事件【{selected_event}】！"
           )
           st.rerun()
+
+  else:
+    # 批次網格輸入模式
+    st.subheader(f"📦 批次快速輸入（事件：{selected_event}）")
+    st.info(
+        "💡 提示：您可以直接在下方表格中連續輸入多筆資料（支援多行新增）。輸入完畢後點擊下方按鈕即可一鍵全部存入！"
+    )
+
+    # 建立一個空白的批次輸入範本表格
+    if "batch_template" not in st.session_state:
+      st.session_state.batch_template = pd.DataFrame(
+          columns=[
+              "發生日期",
+              "姓名",
+              "性別",
+              "身份證字號",
+              "生日",
+              "確診管道",
+              "後續處理",
+          ]
+      )
+
+    # 呈現互動式資料編輯器（允許動態新增多行）
+    edited_batch_df = st.data_editor(
+        st.session_state.batch_template,
+        num_rows="dynamic",
+        use_container_width=True,
+        key="batch_grid",
+    )
+
+    col_btn1, col_btn2 = st.columns([1, 4])
+    with col_btn1:
+      batch_submitted = st.button("💾 批次儲存所有個案")
+    with col_btn2:
+      if st.button("🗑️ 清空目前輸入欄位"):
+        st.session_state.batch_template = pd.DataFrame(
+            columns=[
+                "發生日期",
+                "姓名",
+                "性別",
+                "身份證字號",
+                "生日",
+                "確診管道",
+                "後續處理",
+            ]
+        )
+        st.rerun()
+
+    if batch_submitted:
+      if edited_batch_df.empty:
+        st.warning("⚠️ 表格內沒有任何資料可供儲存！")
+      else:
+        now_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        valid_rows_added = 0
+
+        # 逐行檢查並打包
+        new_rows_list = []
+        for _, row in edited_batch_df.iterrows():
+          name_val = str(row.get("姓名", "")).strip()
+          id_val = str(row.get("身份證字號", "")).strip()
+
+          if name_val and name_val != "nan" and id_val and id_val != "nan":
+            new_rows_list.append({
+                "事件名稱": selected_event,
+                "事件狀態": "進行中",
+                "指標個案": "",
+                "發生日期": str(
+                    row.get("發生日期", datetime.today().strftime("%Y-%m-%d"))
+                ),
+                "姓名": name_val,
+                "性別": str(row.get("性別", "男")),
+                "生日": str(row.get("生日", "")),
+                "身份證字號": id_val.upper(),
+                "確診管道": str(row.get("確診管道", "")),
+                "後續處理": str(row.get("後續處理", "")),
+                "記錄時間": now_time,
+            })
+            valid_rows_added += 1
+
+        if new_rows_list > 0:
+          df_new_batch = pd.DataFrame(new_rows_list)
+          df_logs = pd.concat([df_logs, df_new_batch], ignore_index=True)
+
+          existing_cols = [col for col in DESIRED_COLS if col in df_logs.columns]
+          other_cols = [col for col in df_logs.columns if col not in DESIRED_COLS]
+          df_logs = df_logs[existing_cols + other_cols]
+
+          df_logs.to_csv(DATA_FILE, index=False, encoding="utf-8-sig")
+          st.success(
+              f"🎉 成功批次新增了 {valid_rows_added} 筆確診個案至【{selected_event}】！"
+          )
+          # 清空暫存並重新整理
+          st.session_state.batch_template = pd.DataFrame(
+              columns=[
+                  "發生日期",
+                  "姓名",
+                  "性別",
+                  "身份證字號",
+                  "生日",
+                  "確診管道",
+                  "後續處理",
+              ]
+          )
+          st.rerun()
+        else:
+          st.warning(
+              "⚠️ 請至少填寫完整「姓名」與「身份證字號」才能進行批次儲存！"
+          )
 
 
 # ==========================================
