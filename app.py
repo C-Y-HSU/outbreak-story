@@ -236,7 +236,6 @@ else:
         "💡 提示：您可以直接在下方表格中連續輸入多筆資料（支援多行新增）。輸入完畢後點擊下方按鈕即可一鍵全部存入！"
     )
 
-    # 建立一個空白的批次輸入範本表格
     if "batch_template" not in st.session_state:
       st.session_state.batch_template = pd.DataFrame(
           columns=[
@@ -250,7 +249,6 @@ else:
           ]
       )
 
-    # 呈現互動式資料編輯器（允許動態新增多行）
     edited_batch_df = st.data_editor(
         st.session_state.batch_template,
         num_rows="dynamic",
@@ -283,7 +281,6 @@ else:
         now_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         valid_rows_added = 0
 
-        # 逐行檢查並打包
         new_rows_list = []
         for _, row in edited_batch_df.iterrows():
           name_val = str(row.get("姓名", "")).strip()
@@ -307,7 +304,8 @@ else:
             })
             valid_rows_added += 1
 
-        if new_rows_list > 0:
+        # 【修正處】：將原本的 new_rows_list > 0 改為 len(new_rows_list) > 0
+        if len(new_rows_list) > 0:
           df_new_batch = pd.DataFrame(new_rows_list)
           df_logs = pd.concat([df_logs, df_new_batch], ignore_index=True)
 
@@ -319,7 +317,6 @@ else:
           st.success(
               f"🎉 成功批次新增了 {valid_rows_added} 筆確診個案至【{selected_event}】！"
           )
-          # 清空暫存並重新整理
           st.session_state.batch_template = pd.DataFrame(
               columns=[
                   "發生日期",
