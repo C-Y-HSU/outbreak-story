@@ -5,9 +5,9 @@ import gspread
 import pandas as pd
 import streamlit as st
 
-st.title("🏥 群聚事件管理系統 - Google 雲端資料庫版")
+st.title("🏥 群聚事件管理系統 - 雲端多分頁獨立資料庫")
 st.write(
-    "已成功串接 Google 試算表，所有新增、修改、刪除與結案資料將即時同步至雲端，永不遺失！"
+    "每個群聚事件擁有 Google 試算表中的獨立分頁（Tab），資料即時同步、永不遺失！"
 )
 
 # 定義標準欄位順序
@@ -27,11 +27,10 @@ DESIRED_COLS = [
 
 
 # ==========================================
-# 雲端資料庫連線與讀寫函數
+# 雲端資料庫連線與多分頁讀寫函數
 # ==========================================
 @st.cache_resource
-def init_google_sheet():
-  # 從 Streamlit 秘密金鑰 (Secrets) 讀取憑證
+def init_google_spreadsheet():
   creds_dict = dict(st.secrets["gcp_service_account"])
   scope = [
       "https://www.googleapis.com/auth/spreadsheets",
@@ -40,53 +39,66 @@ def init_google_sheet():
   creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
   client = gspread.authorize(creds)
 
-  # 使用你提供的專屬 Google 試算表 ID
+  # 你的專屬 Google 試算表 ID
   sheet_id = "16EGDmPEQnhjhYrJ3Y5Afc-s1ByM3Va7eHkBlCXSIBUU"
-  spreadsheet = client.open_by_key(sheet_id)
-  return spreadsheet.sheet1
+  return client.open_by_key(sheet_id)
 
 
 def load_data():
   try:
-    sheet = init_google_sheet()
-    data = sheet.get_all_records()
+    spreadsheet = init_google_spreadsheet()
+    sheets = spreadsheet.worksheets()
+    all_dfs = []
 
-    if not data:
-      # 如果試算表是空的，自動幫你建立表頭欄位！
-      df = pd.DataFrame(columns=DESIRED_COLS)
-      sheet.update(
-          [df.columns.values.tolist()] + df.values.tolist()
-      )  # 修正為直接傳入 list
-      return df
+    for sheet in sheets:
+      data = sheet.get_all_records()
+      if data:
+        df = pd.DataFrame(data)
+        # 確保分頁名稱即為事件名稱
+        df["事件名稱"] = sheet.title
+        all_dfs.append(df)
 
-    df = pd.DataFrame(data)
+    if not all_dfs:
+      return pd.DataFrame(columns=DESIRED_COLS)
 
-    # 確保所有必要欄位都存在
+    df_logs = pd.concat(all_dfs, ignore_index=True)
+
     for col in DESIRED_COLS:
-      if col not in df.columns:
-        df[col] = ""
+      if col not in df_logs.columns:
+        df_logs[col] = ""
 
-    df["事件名稱"] = df["事件名稱"].fillna("未命名群聚事件").astype(str)
-    df["事件狀態"] = df["事件狀態"].fillna("進行中").astype(str)
-    df["指標個案"] = df["指標個案"].fillna("").astype(str)
+    df_logs["事件名稱"] = df_logs["事件名稱"].fillna("未命名群聚事件").astype(str)
+    df_logs["事件狀態"] = df_logs["事件狀態"].fillna("進行中").astype(str)
+    df_logs["指標個案"] = df_logs["指標個案"].fillna("").astype(str)
 
-    existing_cols = [col for col in DESIRED_COLS if col in df.columns]
-    other_cols = [col for col in df.columns if col not in DESIRED_COLS]
-    return df[existing_cols + other_cols]
+    existing_cols = [col for col in DESIRED_COLS if col in df_logs.columns]
+    other_cols = [col for col in df_logs.columns if col not in DESIRED_COLS]
+    return df_logs[existing_cols + other_cols]
 
   except Exception as e:
-    st.error(
-        f"⚠️ 無法連線至 Google 試算表，請檢查 Streamlit Secrets 設定是否正確！錯誤原因："
-        f" {e}"
-    )
+    st.error(f"⚠️ 無法讀取 Google 試算表，錯誤原因：{e}")
     return pd.DataFrame(columns=DESIRED_COLS)
 
 
-def save_data(df):
-  sheet = init_google_sheet()
-  sheet.clear()  # 清空舊資料
-  # 將表頭與 DataFrame 資料全部寫回 Google 試算表
-  sheet.update([df.columns.values.tolist()] + df.values.tolist())
+def save_event_data(event_name, full_df):
+  spreadsheet = init_google_spreadsheet()
+  df_event = full_df[full_df["事件名稱"] == event_name]
+
+  # 尋找對應事件名稱的分頁，若不存在則自動新增一個分頁！
+  try:
+    sheet = spreadsheet.worksheet(event_name)
+  except gspread.exceptions.WorksheetNotFound:
+    sheet = spreadsheet.add_worksheet(title=event_name, rows=100, cols=20)
+
+  sheet.clear()
+  if not df_event.empty:
+    existing_cols = [col for col in DESIRED_COLS if col in df_event.columns]
+    df_event = df_event[existing_cols]
+    sheet.update(
+        [df_event.columns.values.tolist()] + df_event.values.tolist()
+    )
+  else:
+    sheet.update([DESIRED_COLS])
 
 
 df_logs = load_data()
@@ -148,13 +160,13 @@ if not df_logs.empty and selected_event in event_status_map:
   if current_status == "進行中":
     if st.sidebar.button("🔒 將此事件標記為結案"):
       df_logs.loc[df_logs["事件名稱"] == selected_event, "事件狀態"] = "已結案"
-      save_data(df_logs)
-      st.sidebar.success("已成功將此事件結案並同步至雲端！")
+      save_event_data(selected_event, df_logs)
+      st.sidebar.success("已成功將此事件結案並同步至專屬分頁！")
       st.rerun()
   else:
     if st.sidebar.button("🔓 重新啟動此事件"):
       df_logs.loc[df_logs["事件名稱"] == selected_event, "事件狀態"] = "進行中"
-      save_data(df_logs)
+      save_event_data(selected_event, df_logs)
       st.sidebar.success("已成功重新啟動此事件！")
       st.rerun()
 
@@ -258,21 +270,17 @@ else:
 
           df_logs = pd.concat([df_logs, new_data], ignore_index=True)
 
-          existing_cols = [col for col in DESIRED_COLS if col in df_logs.columns]
-          other_cols = [col for col in df_logs.columns if col not in DESIRED_COLS]
-          df_logs = df_logs[existing_cols + other_cols]
-
-          save_data(df_logs)
+          # 儲存至該事件專屬分頁
+          save_event_data(selected_event, df_logs)
           st.success(
-              f"🎉 成功將確診者【{name}】記錄至雲端事件【{selected_event}】！"
+              f"🎉 成功將確診者【{name}】記錄至雲端分頁【{selected_event}】！"
           )
           st.rerun()
 
   else:
     st.subheader(f"📦 批次快速輸入（事件：{selected_event}）")
     st.info(
-        "💡 提示：您可以直接在下方表格中連續輸入多筆資料。輸入完畢後點擊下方按鈕即可一鍵同步至 Google"
-        " 試算表！"
+        "💡 提示：您可以直接在下方表格中連續輸入多筆資料。輸入完畢後點擊下方按鈕即可一鍵同步至該事件的專屬分頁！"
     )
 
     if "batch_template" not in st.session_state:
@@ -297,7 +305,7 @@ else:
 
     col_btn1, col_btn2 = st.columns([1, 4])
     with col_btn1:
-      batch_submitted = st.button("💾 批次儲存至雲端")
+      batch_submitted = st.button("💾 批次儲存至專屬分頁")
     with col_btn2:
       if st.button("🗑️ 清空目前輸入欄位"):
         st.session_state.batch_template = pd.DataFrame(
@@ -347,13 +355,9 @@ else:
           df_new_batch = pd.DataFrame(new_rows_list)
           df_logs = pd.concat([df_logs, df_new_batch], ignore_index=True)
 
-          existing_cols = [col for col in DESIRED_COLS if col in df_logs.columns]
-          other_cols = [col for col in df_logs.columns if col not in DESIRED_COLS]
-          df_logs = df_logs[existing_cols + other_cols]
-
-          save_data(df_logs)
+          save_event_data(selected_event, df_logs)
           st.success(
-              f"🎉 成功批次新增了 {valid_rows_added} 筆確診個案至雲端【{selected_event}】！"
+              f"🎉 成功批次新增了 {valid_rows_added} 筆確診個案至雲端分頁【{selected_event}】！"
           )
           st.session_state.batch_template = pd.DataFrame(
               columns=[
@@ -377,7 +381,7 @@ else:
 # 主畫面 2：目前事件的總日誌表格與操作區
 # ==========================================
 st.markdown("---")
-st.subheader(f"📋 【{selected_event}】目前的確診個案總日誌（雲端同步）")
+st.subheader(f"📋 【{selected_event}】目前的確診個案總日誌（專屬雲端分頁）")
 
 if not df_current_event.empty:
   df_display = df_current_event.reset_index(drop=True).copy()
@@ -409,9 +413,9 @@ if not df_current_event.empty:
       df_logs.loc[df_logs["事件名稱"] == selected_event, "指標個案"] = ""
       df_logs.loc[target_idx, "指標個案"] = "⭐ 指標個案"
 
-      save_data(df_logs)
+      save_event_data(selected_event, df_logs)
       st.success(
-          f"✨ 已成功指定【{selected_case_label}】為本群聚事件的指標個案，並同步至雲端！"
+          f"✨ 已成功指定【{selected_case_label}】為本群聚事件的指標個案，並同步至雲端分頁！"
       )
       st.rerun()
 
@@ -471,9 +475,11 @@ if not df_current_event.empty:
 
         col_sub1, col_sub2 = st.columns(2)
         with col_sub1:
-          update_submitted = st.form_submit_button("💾 儲存修改至雲端")
+          update_submitted = st.form_submit_button("💾 儲存修改至雲端分頁")
         with col_sub2:
-          delete_submitted = st.form_submit_button("🗑️ 從雲端刪除此個案")
+          delete_submitted = st.form_submit_button(
+              "🗑️ 從雲端分頁刪除此個案"
+          )
 
         if update_submitted:
           if not edit_name or not edit_id:
@@ -487,20 +493,20 @@ if not df_current_event.empty:
             df_logs.loc[target_idx, "確診管道"] = edit_diag
             df_logs.loc[target_idx, "後續處理"] = edit_follow
 
-            save_data(df_logs)
-            st.success(f"✨ 成功更新個案【{edit_name}】並同步至雲端！")
+            save_event_data(selected_event, df_logs)
+            st.success(f"✨ 成功更新個案【{edit_name}】並同步至雲端分頁！")
             st.rerun()
 
         if delete_submitted:
           deleted_name = target_row["姓名"]
           deleted_id = target_row["身份證字號"]
           df_logs = df_logs.drop(target_idx).reset_index(drop=True)
-          save_data(df_logs)
+          save_event_data(selected_event, df_logs)
           st.success(f"🗑️ 已成功刪除個案【{deleted_name} ({deleted_id})】！")
           st.rerun()
 
   else:
-    st.info("🔒 此事件已結案，無法再變更或刪除個案。")
+    st.info("🔒 此事件已結案, 無法再變更或刪除個案。")
 
 else:
   st.info(f"事件【{selected_event}】目前尚無個案紀錄！")
