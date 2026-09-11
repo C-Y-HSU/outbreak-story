@@ -5,9 +5,9 @@ import gspread
 import pandas as pd
 import streamlit as st
 
-st.title("🏥 群聚事件管理系統 - 雲端多分頁獨立資料庫")
+st.title("🏥 群聚事件管理系統 - 住民資料庫與智慧帶入版")
 st.write(
-    "每個群聚事件擁有 Google 試算表中的獨立分頁（Tab），資料即時同步、永不遺失！"
+    "支援住民基本資料庫管理、關鍵字智慧搜尋帶入、多事件獨立分頁雲端同步。"
 )
 
 # 定義標準欄位順序
@@ -25,6 +25,8 @@ DESIRED_COLS = [
     "記錄時間",
 ]
 
+RESIDENT_COLS = ["姓名", "性別", "生日", "身份證字號"]
+
 
 # ==========================================
 # 雲端資料庫連線與多分頁讀寫函數
@@ -39,11 +41,43 @@ def init_google_spreadsheet():
   creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
   client = gspread.authorize(creds)
 
-  # 你的專屬 Google 試算表 ID
   sheet_id = "16EGDmPEQnhjhYrJ3Y5Afc-s1ByM3Va7eHkBlCXSIBUU"
   return client.open_by_key(sheet_id)
 
 
+# 1. 讀取住民基本資料庫
+def load_residents():
+  try:
+    spreadsheet = init_google_spreadsheet()
+    try:
+      sheet = spreadsheet.worksheet("住民基本資料")
+    except gspread.exceptions.WorksheetNotFound:
+      sheet = spreadsheet.add_worksheet(
+          title="住民基本資料", rows=100, cols=10
+      )
+      sheet.update([RESIDENT_COLS])
+
+    data = sheet.get_all_records()
+    if not data:
+      return pd.DataFrame(columns=RESIDENT_COLS)
+    return pd.DataFrame(data)
+  except Exception as e:
+    return pd.DataFrame(columns=RESIDENT_COLS)
+
+
+# 2. 儲存住民基本資料庫
+def save_residents(df_res):
+  spreadsheet = init_google_spreadsheet()
+  try:
+    sheet = spreadsheet.worksheet("住民基本資料")
+  except gspread.exceptions.WorksheetNotFound:
+    sheet = spreadsheet.add_worksheet(title="住民基本資料", rows=100, cols=10)
+
+  sheet.clear()
+  sheet.update([df_res.columns.values.tolist()] + df_res.values.tolist())
+
+
+# 3. 讀取群聚事件日誌
 def load_data():
   try:
     spreadsheet = init_google_spreadsheet()
@@ -51,10 +85,12 @@ def load_data():
     all_dfs = []
 
     for sheet in sheets:
+      # 排除住民基本資料分頁
+      if sheet.title == "住民基本資料":
+        continue
       data = sheet.get_all_records()
       if data:
         df = pd.DataFrame(data)
-        # 確保分頁名稱即為事件名稱
         df["事件名稱"] = sheet.title
         all_dfs.append(df)
 
@@ -80,11 +116,11 @@ def load_data():
     return pd.DataFrame(columns=DESIRED_COLS)
 
 
+# 4. 儲存單一事件日誌
 def save_event_data(event_name, full_df):
   spreadsheet = init_google_spreadsheet()
   df_event = full_df[full_df["事件名稱"] == event_name]
 
-  # 尋找對應事件名稱的分頁，若不存在則自動新增一個分頁！
   try:
     sheet = spreadsheet.worksheet(event_name)
   except gspread.exceptions.WorksheetNotFound:
@@ -102,9 +138,10 @@ def save_event_data(event_name, full_df):
 
 
 df_logs = load_data()
+df_residents = load_residents()
 
 # ==========================================
-# 側邊欄：事件切換、結案管理與新建
+# 側邊欄：事件管理與住民資料庫維護
 # ==========================================
 st.sidebar.header("📁 事件管理與結案中心")
 
@@ -170,6 +207,20 @@ if not df_logs.empty and selected_event in event_status_map:
       st.sidebar.success("已成功重新啟動此事件！")
       st.rerun()
 
+# 側邊欄額外功能：管理住民基本資料庫
+with st.sidebar.expander("👥 管理機構住民基本資料庫"):
+  st.write("在此維護機構全體住民名冊，方便日後疫調快速帶入。")
+  edited_res_df = st.data_editor(
+      df_residents,
+      num_rows="dynamic",
+      use_container_width=True,
+      key="resident_editor",
+  )
+  if st.button("💾 儲存住民名冊至雲端"):
+    save_residents(edited_res_df)
+    st.success("✨ 住民基本資料已成功更新！")
+    st.rerun()
+
 # 篩選當前事件資料，並將指標個案置頂
 if not df_logs.empty and "事件名稱" in df_logs.columns:
   df_current_event = df_logs[df_logs["事件名稱"] == selected_event].copy()
@@ -198,7 +249,7 @@ if not df_current_event.empty and "指標個案" in df_current_event.columns:
     ic = index_cases.iloc[0]
     st.success(
         f"### 🌟 【{selected_event}】之官方認定指標個案\n"
-        f"- **姓名**：{ic['姓名']} （{ic['性別']}）\n"
+        f"- **姓名**：{ic['姓名']} ({ic['性別']})\n"
         f"- **身分證字號**：{ic['身份證字號']}\n"
         f"- **發生日期**：{ic['發生日期']} | **確診管道**：{ic['確診管道']}\n"
         f"- **後續處理**：{ic['後續處理']}"
@@ -210,7 +261,7 @@ if not df_current_event.empty and "指標個案" in df_current_event.columns:
 
 
 # ==========================================
-# 主畫面 1：新增個案模式選擇（單筆 vs 批次網格輸入）
+# 主畫面 1：新增個案（支援住民資料庫關鍵字智慧搜尋帶入）
 # ==========================================
 if current_status == "已結案":
   st.warning(
@@ -218,163 +269,91 @@ if current_status == "已結案":
       "重新啟動此事件」。"
   )
 else:
-  input_mode = st.radio(
-      "📥 選擇個案輸入方式", ["✍️ 單筆詳細輸入", "📦 批次快速輸入（Excel 網格）"],
-      horizontal=True
-  )
+  st.subheader(f"📝 新增確診者（事件：{selected_event}）")
 
-  if input_mode == "✍️ 單筆詳細輸入":
-    with st.form("case_form"):
-      st.subheader(f"📝 單筆新增確診者（事件：{selected_event}）")
-      case_date = st.date_input("1. 發生日期", value=datetime.today())
-
-      col1, col2 = st.columns(2)
-      with col1:
-        name = st.text_input("2. 姓名")
-        gender = st.selectbox("3. 性別", ["男", "女", "其他"])
-
-      with col2:
-        birthday = st.text_input(
-            "4. 生日（例如：1991-03-08 或 民國80年3月8日）"
-        )
-        id_number = st.text_input("5. 身份證字號（例如：A123456789）")
-
-      diagnosis_method = st.text_input(
-          "6. 確診管道（例如：快篩陽性、發燒就醫、PCR）"
-      )
-      follow_up_action = st.text_area(
-          "7. 後續處理（例如：安排單人隔離、通報疾管科）"
+  # 住民智慧搜尋帶入區塊
+  selected_resident_key = "-- 手動輸入 / 不從名冊帶入 --"
+  if not df_residents.empty:
+    resident_options = {
+        f"{r['姓名']} ({r['身份證字號']})": r
+        for _, r in df_residents.iterrows()
+        if str(r.get("姓名", "")).strip()
+    }
+    if resident_options:
+      selected_resident_key = st.selectbox(
+          "🔍 【智慧搜尋帶入】從住民資料庫搜尋並帶入基本資料（可直接輸入姓名或身分證字號關鍵字篩選）",
+          ["-- 手動輸入 / 不從名冊帶入 --"] + list(resident_options.keys()),
       )
 
-      submitted = st.form_submit_button("送出並記錄個案日誌")
+  # 取得預設值
+  default_name = ""
+  default_gender = "男"
+  default_birthday = ""
+  default_id = ""
 
-      if submitted:
-        if not name or not id_number:
-          st.warning("⚠️ 請務必填寫「姓名」與「身份證字號」！")
-        else:
-          now_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+  if selected_resident_key != "-- 手動輸入 / 不從名冊帶入 --":
+    res_data = resident_options[selected_resident_key]
+    default_name = str(res_data.get("姓名", ""))
+    default_gender = str(res_data.get("性別", "男"))
+    default_birthday = str(res_data.get("生日", ""))
+    default_id = str(res_data.get("身份證字號", ""))
 
-          new_data = pd.DataFrame([{
-              "事件名稱": selected_event,
-              "事件狀態": "進行中",
-              "指標個案": "",
-              "發生日期": str(case_date),
-              "姓名": name,
-              "性別": gender,
-              "生日": birthday,
-              "身份證字號": id_number.upper(),
-              "確診管道": diagnosis_method,
-              "後續處理": follow_up_action,
-              "記錄時間": now_time,
-          }])
+  with st.form("case_form"):
+    case_date = st.date_input("1. 發生日期", value=datetime.today())
 
-          df_logs = pd.concat([df_logs, new_data], ignore_index=True)
+    col1, col2 = st.columns(2)
+    with col1:
+      name = st.text_input("2. 姓名", value=default_name)
+      genders = ["男", "女", "其他"]
+      g_idx = (
+          genders.index(default_gender) if default_gender in genders else 0
+      )
+      gender = st.selectbox("3. 性別", genders, index=g_idx)
 
-          # 儲存至該事件專屬分頁
-          save_event_data(selected_event, df_logs)
-          st.success(
-              f"🎉 成功將確診者【{name}】記錄至雲端分頁【{selected_event}】！"
-          )
-          st.rerun()
+    with col2:
+      birthday = st.text_input(
+          "4. 生日（例如：1991-03-08 或 民國80年3月8日）",
+          value=default_birthday,
+      )
+      id_number = st.text_input(
+          "5. 身份證字號（例如：A123456789）", value=default_id
+      )
 
-  else:
-    st.subheader(f"📦 批次快速輸入（事件：{selected_event}）")
-    st.info(
-        "💡 提示：您可以直接在下方表格中連續輸入多筆資料。輸入完畢後點擊下方按鈕即可一鍵同步至該事件的專屬分頁！"
+    diagnosis_method = st.text_input(
+        "6. 確診管道（例如：快篩陽性、發燒就醫、PCR）"
+    )
+    follow_up_action = st.text_area(
+        "7. 後續處理（例如：安排單人隔離、通報疾管科）"
     )
 
-    if "batch_template" not in st.session_state:
-      st.session_state.batch_template = pd.DataFrame(
-          columns=[
-              "發生日期",
-              "姓名",
-              "性別",
-              "身份證字號",
-              "生日",
-              "確診管道",
-              "後續處理",
-          ]
-      )
+    submitted = st.form_submit_button("送出並記錄個案日誌")
 
-    edited_batch_df = st.data_editor(
-        st.session_state.batch_template,
-        num_rows="dynamic",
-        use_container_width=True,
-        key="batch_grid",
-    )
-
-    col_btn1, col_btn2 = st.columns([1, 4])
-    with col_btn1:
-      batch_submitted = st.button("💾 批次儲存至專屬分頁")
-    with col_btn2:
-      if st.button("🗑️ 清空目前輸入欄位"):
-        st.session_state.batch_template = pd.DataFrame(
-            columns=[
-                "發生日期",
-                "姓名",
-                "性別",
-                "身份證字號",
-                "生日",
-                "確診管道",
-                "後續處理",
-            ]
-        )
-        st.rerun()
-
-    if batch_submitted:
-      if edited_batch_df.empty:
-        st.warning("⚠️ 表格內沒有任何資料可供儲存！")
+    if submitted:
+      if not name or not id_number:
+        st.warning("⚠️ 請務必填寫「姓名」與「身份證字號」！")
       else:
         now_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        valid_rows_added = 0
 
-        new_rows_list = []
-        for _, row in edited_batch_df.iterrows():
-          name_val = str(row.get("姓名", "")).strip()
-          id_val = str(row.get("身份證字號", "")).strip()
+        new_data = pd.DataFrame([{
+            "事件名稱": selected_event,
+            "事件狀態": "進行中",
+            "指標個案": "",
+            "發生日期": str(case_date),
+            "姓名": name,
+            "性別": gender,
+            "生日": birthday,
+            "身份證字號": id_number.upper(),
+            "確診管道": diagnosis_method,
+            "後續處理": follow_up_action,
+            "記錄時間": now_time,
+        }])
 
-          if name_val and name_val != "nan" and id_val and id_val != "nan":
-            new_rows_list.append({
-                "事件名稱": selected_event,
-                "事件狀態": "進行中",
-                "指標個案": "",
-                "發生日期": str(
-                    row.get("發生日期", datetime.today().strftime("%Y-%m-%d"))
-                ),
-                "姓名": name_val,
-                "性別": str(row.get("性別", "男")),
-                "生日": str(row.get("生日", "")),
-                "身份證字號": id_val.upper(),
-                "確診管道": str(row.get("確診管道", "")),
-                "後續處理": str(row.get("後續處理", "")),
-                "記錄時間": now_time,
-            })
-            valid_rows_added += 1
-
-        if len(new_rows_list) > 0:
-          df_new_batch = pd.DataFrame(new_rows_list)
-          df_logs = pd.concat([df_logs, df_new_batch], ignore_index=True)
-
-          save_event_data(selected_event, df_logs)
-          st.success(
-              f"🎉 成功批次新增了 {valid_rows_added} 筆確診個案至雲端分頁【{selected_event}】！"
-          )
-          st.session_state.batch_template = pd.DataFrame(
-              columns=[
-                  "發生日期",
-                  "姓名",
-                  "性別",
-                  "身份證字號",
-                  "生日",
-                  "確診管道",
-                  "後續處理",
-              ]
-          )
-          st.rerun()
-        else:
-          st.warning(
-              "⚠️ 請至少填寫完整「姓名」與「身份證字號」才能進行批次儲存！"
-          )
+        df_logs = pd.concat([df_logs, new_data], ignore_index=True)
+        save_event_data(selected_event, df_logs)
+        st.success(
+            f"🎉 成功將確診者【{name}】記錄至雲端分頁【{selected_event}】！"
+        )
+        st.rerun()
 
 
 # ==========================================
@@ -506,7 +485,7 @@ if not df_current_event.empty:
           st.rerun()
 
   else:
-    st.info("🔒 此事件已結案, 無法再變更或刪除個案。")
+    st.info("🔒 此事件已結案，無法再變更或刪除個案。")
 
 else:
   st.info(f"事件【{selected_event}】目前尚無個案紀錄！")
