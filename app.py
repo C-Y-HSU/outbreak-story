@@ -5,12 +5,12 @@ import gspread
 import pandas as pd
 import streamlit as st
 
-st.title("🏥 群聚事件管理系統 - 住民資料庫與智慧帶入版")
+st.title("🏥 群聚事件管理系統 - 機構住民資料庫版")
 st.write(
-    "支援住民基本資料庫管理、關鍵字智慧搜尋帶入、多事件獨立分頁雲端同步。"
+    "支援住民名冊（姓名、房床號、身分證字號、出生日期、入住日期）維護與智慧快速帶入。"
 )
 
-# 定義標準欄位順序
+# 定義群聚事件日誌的標準欄位順序
 DESIRED_COLS = [
     "事件名稱",
     "事件狀態",
@@ -25,7 +25,8 @@ DESIRED_COLS = [
     "記錄時間",
 ]
 
-RESIDENT_COLS = ["姓名", "性別", "生日", "身份證字號"]
+# 定義住民基本資料庫的精準欄位順序
+RESIDENT_COLS = ["姓名", "房床號", "身份證字號", "出生日期", "入住日期"]
 
 
 # ==========================================
@@ -60,7 +61,12 @@ def load_residents():
     data = sheet.get_all_records()
     if not data:
       return pd.DataFrame(columns=RESIDENT_COLS)
-    return pd.DataFrame(data)
+    df = pd.DataFrame(data)
+    # 確保欄位完整
+    for col in RESIDENT_COLS:
+      if col not in df.columns:
+        df[col] = ""
+    return df
   except Exception as e:
     return pd.DataFrame(columns=RESIDENT_COLS)
 
@@ -74,6 +80,8 @@ def save_residents(df_res):
     sheet = spreadsheet.add_worksheet(title="住民基本資料", rows=100, cols=10)
 
   sheet.clear()
+  existing_cols = [col for col in RESIDENT_COLS if col in df_res.columns]
+  df_res = df_res[existing_cols]
   sheet.update([df_res.columns.values.tolist()] + df_res.values.tolist())
 
 
@@ -85,7 +93,6 @@ def load_data():
     all_dfs = []
 
     for sheet in sheets:
-      # 排除住民基本資料分頁
       if sheet.title == "住民基本資料":
         continue
       data = sheet.get_all_records()
@@ -207,9 +214,9 @@ if not df_logs.empty and selected_event in event_status_map:
       st.sidebar.success("已成功重新啟動此事件！")
       st.rerun()
 
-# 側邊欄額外功能：管理住民基本資料庫
+# 側邊欄額上：管理機構住民基本資料庫
 with st.sidebar.expander("👥 管理機構住民基本資料庫"):
-  st.write("在此維護機構全體住民名冊，方便日後疫調快速帶入。")
+  st.write("依序維護：姓名、房床號、身分證字號、出生日期、入住日期")
   edited_res_df = st.data_editor(
       df_residents,
       num_rows="dynamic",
@@ -249,7 +256,7 @@ if not df_current_event.empty and "指標個案" in df_current_event.columns:
     ic = index_cases.iloc[0]
     st.success(
         f"### 🌟 【{selected_event}】之官方認定指標個案\n"
-        f"- **姓名**：{ic['姓名']} ({ic['性別']})\n"
+        f"- **姓名**：{ic['姓名']} （性別：{ic['性別']}）\n"
         f"- **身分證字號**：{ic['身份證字號']}\n"
         f"- **發生日期**：{ic['發生日期']} | **確診管道**：{ic['確診管道']}\n"
         f"- **後續處理**：{ic['後續處理']}"
@@ -261,7 +268,7 @@ if not df_current_event.empty and "指標個案" in df_current_event.columns:
 
 
 # ==========================================
-# 主畫面 1：新增個案（支援住民資料庫關鍵字智慧搜尋帶入）
+# 主畫面 1：新增個案（支援住民資料庫智慧帶入）
 # ==========================================
 if current_status == "已結案":
   st.warning(
@@ -271,31 +278,27 @@ if current_status == "已結案":
 else:
   st.subheader(f"📝 新增確診者（事件：{selected_event}）")
 
-  # 住民智慧搜尋帶入區塊
   selected_resident_key = "-- 手動輸入 / 不從名冊帶入 --"
   if not df_residents.empty:
     resident_options = {
-        f"{r['姓名']} ({r['身份證字號']})": r
+        f"[{r.get('房床號', '無房號')}] {r['姓名']} ({r['身份證字號']})": r
         for _, r in df_residents.iterrows()
         if str(r.get("姓名", "")).strip()
     }
     if resident_options:
       selected_resident_key = st.selectbox(
-          "🔍 【智慧搜尋帶入】從住民資料庫搜尋並帶入基本資料（可直接輸入姓名或身分證字號關鍵字篩選）",
+          "🔍 【智慧搜尋帶入】輸入房號、姓名或身分證字號關鍵字篩選住民",
           ["-- 手動輸入 / 不從名冊帶入 --"] + list(resident_options.keys()),
       )
 
-  # 取得預設值
   default_name = ""
-  default_gender = "男"
   default_birthday = ""
   default_id = ""
 
   if selected_resident_key != "-- 手動輸入 / 不從名冊帶入 --":
     res_data = resident_options[selected_resident_key]
     default_name = str(res_data.get("姓名", ""))
-    default_gender = str(res_data.get("性別", "男"))
-    default_birthday = str(res_data.get("生日", ""))
+    default_birthday = str(res_data.get("出生日期", ""))
     default_id = str(res_data.get("身份證字號", ""))
 
   with st.form("case_form"):
@@ -304,19 +307,16 @@ else:
     col1, col2 = st.columns(2)
     with col1:
       name = st.text_input("2. 姓名", value=default_name)
-      genders = ["男", "女", "其他"]
-      g_idx = (
-          genders.index(default_gender) if default_gender in genders else 0
-      )
-      gender = st.selectbox("3. 性別", genders, index=g_idx)
+      gender = st.selectbox("3. 性別", ["男", "女", "其他"])
 
     with col2:
       birthday = st.text_input(
-          "4. 生日（例如：1991-03-08 或 民國80年3月8日）",
+          "4. 生日／出生日期",
           value=default_birthday,
+          placeholder="例如：1991-03-08",
       )
       id_number = st.text_input(
-          "5. 身份證字號（例如：A123456789）", value=default_id
+          "5. 身份證字號", value=default_id, placeholder="例如：A123456789"
       )
 
     diagnosis_method = st.text_input(
