@@ -1,13 +1,16 @@
 from datetime import datetime
+import io
 import os
+
+from docxtpl import DocxTemplate
 from google.oauth2.service_account import Credentials
 import gspread
 import pandas as pd
 import streamlit as st
 
-st.title("🏥 群聚事件管理系統 - 機構住民資料庫版")
+st.title("🏥 群聚事件管理系統 - 雲端多事件與通報單生成")
 st.write(
-    "支援住民名冊（姓名、房床號、身分證字號、出生日期、入住日期）維護與智慧快速帶入。"
+    "支援住民資料庫、智慧帶入、雲端分頁同步，以及一鍵生成正式 Word 通報單功能。"
 )
 
 # 定義群聚事件日誌的標準欄位順序
@@ -25,12 +28,12 @@ DESIRED_COLS = [
     "記錄時間",
 ]
 
-# 定義住民基本資料庫的精準欄位順序
+# 定義住民基本資料庫的欄位順序
 RESIDENT_COLS = ["姓名", "房床號", "身份證字號", "出生日期", "入住日期"]
 
 
 # ==========================================
-# 雲端資料庫連線與多分頁讀寫函數
+# 雲端資料庫連線與讀寫函數
 # ==========================================
 @st.cache_resource
 def init_google_spreadsheet():
@@ -46,7 +49,6 @@ def init_google_spreadsheet():
   return client.open_by_key(sheet_id)
 
 
-# 1. 讀取住民基本資料庫
 def load_residents():
   try:
     spreadsheet = init_google_spreadsheet()
@@ -62,7 +64,6 @@ def load_residents():
     if not data:
       return pd.DataFrame(columns=RESIDENT_COLS)
     df = pd.DataFrame(data)
-    # 確保欄位完整
     for col in RESIDENT_COLS:
       if col not in df.columns:
         df[col] = ""
@@ -71,7 +72,6 @@ def load_residents():
     return pd.DataFrame(columns=RESIDENT_COLS)
 
 
-# 2. 儲存住民基本資料庫
 def save_residents(df_res):
   spreadsheet = init_google_spreadsheet()
   try:
@@ -85,7 +85,6 @@ def save_residents(df_res):
   sheet.update([df_res.columns.values.tolist()] + df_res.values.tolist())
 
 
-# 3. 讀取群聚事件日誌
 def load_data():
   try:
     spreadsheet = init_google_spreadsheet()
@@ -123,7 +122,6 @@ def load_data():
     return pd.DataFrame(columns=DESIRED_COLS)
 
 
-# 4. 儲存單一事件日誌
 def save_event_data(event_name, full_df):
   spreadsheet = init_google_spreadsheet()
   df_event = full_df[full_df["事件名稱"] == event_name]
@@ -146,6 +144,15 @@ def save_event_data(event_name, full_df):
 
 df_logs = load_data()
 df_residents = load_residents()
+
+# 建立對應字典，方便從身分證查出房床號
+resident_room_map = {}
+if not df_residents.empty:
+  for _, r in df_residents.iterrows():
+    id_key = str(r.get("身份證字號", "")).strip().upper()
+    room_val = str(r.get("房床號", "")).strip()
+    if id_key:
+      resident_room_map[id_key] = room_val
 
 # ==========================================
 # 側邊欄：事件管理與住民資料庫維護
@@ -214,7 +221,6 @@ if not df_logs.empty and selected_event in event_status_map:
       st.sidebar.success("已成功重新啟動此事件！")
       st.rerun()
 
-# 側邊欄額上：管理機構住民基本資料庫
 with st.sidebar.expander("👥 管理機構住民基本資料庫"):
   st.write("依序維護：姓名、房床號、身分證字號、出生日期、入住日期")
   edited_res_df = st.data_editor(
@@ -228,7 +234,6 @@ with st.sidebar.expander("👥 管理機構住民基本資料庫"):
     st.success("✨ 住民基本資料已成功更新！")
     st.rerun()
 
-# 篩選當前事件資料，並將指標個案置頂
 if not df_logs.empty and "事件名稱" in df_logs.columns:
   df_current_event = df_logs[df_logs["事件名稱"] == selected_event].copy()
 
@@ -268,7 +273,7 @@ if not df_current_event.empty and "指標個案" in df_current_event.columns:
 
 
 # ==========================================
-# 主畫面 1：新增個案（支援住民資料庫智慧帶入）
+# 主畫面 1：新增個案
 # ==========================================
 if current_status == "已結案":
   st.warning(
@@ -357,20 +362,79 @@ else:
 
 
 # ==========================================
-# 主畫面 2：目前事件的總日誌表格與操作區
+# 主畫面 2：目前事件的總日誌表格與通報單生成
 # ==========================================
 st.markdown("---")
-st.subheader(f"📋 【{selected_event}】目前的確診個案總日誌（專屬雲端分頁）")
+st.subheader(f"📋 【{selected_event}】目前的確診個案總日誌")
 
 if not df_current_event.empty:
   df_display = df_current_event.reset_index(drop=True).copy()
   df_display.index = df_display.index + 1
   st.dataframe(df_display, use_container_width=True)
 
+  # ------------------------------------------
+  # 獨立區塊：一鍵下載 Word 通報單
+  # ------------------------------------------
+  st.markdown("---")
+  st.markdown("#### 📄 匯出正式 Word 通報單")
+  report_options = {}
+  for local_num, (idx, row) in enumerate(df_current_event.iterrows(), start=1):
+    label = f"個案編號 {local_num}：{row['姓名']} ({row['身份證字號']})"
+    report_options[label] = row
+
+  selected_report_label = st.selectbox(
+      "選擇要生成 Word 通報單的個案",
+      list(report_options.keys()),
+      key="report_select",
+  )
+
+  if st.button("📥 點擊生成此個案的 Word 通報單"):
+    row_data = report_options[selected_report_label]
+    id_upper = str(row_data["身份證字號"]).strip().upper()
+    room_no = resident_room_map.get(id_upper, "未建檔房號")
+
+    context = {
+        "姓名": str(row_data["姓名"]),
+        "房床號": room_no,
+        "身份證字號": str(row_data["身份證字號"]),
+        "生日": str(row_data["生日"]),
+        "發生日期": str(row_data["發生日期"]),
+        "確診管道": str(row_data["確診管道"]),
+        "後續處理": str(row_data["後續處理"]),
+    }
+
+    template_path = "template.docx"
+    if os.path.exists(template_path):
+      try:
+        doc = DocxTemplate(template_path)
+        doc.render(context)
+
+        file_stream = io.BytesIO()
+        doc.save(file_stream)
+        file_stream.seek(0)
+
+        st.download_button(
+            label=f"💾 下載 【{row_data['姓名']}】 的正式通報單.docx",
+            data=file_stream,
+            file_name=f"通報單_{row_data['姓名']}_{row_data['身份證字號']}.docx",
+            mime=(
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            ),
+        )
+        st.success("✅ 通報單已成功生成，請點擊上方出現的下載按鈕！")
+      except Exception as e:
+        st.error(f"⚠️ 生成 Word 檔案時發生錯誤：{e}")
+    else:
+      st.error(
+          "⚠️ 找不到 Word 範本檔案 (`template.docx`)，請確認是否已經上傳至 GitHub"
+          " 專案根目錄！"
+      )
+
   if current_status != "已結案":
     # ------------------------------------------
     # 子功能 A：設定指標個案
     # ------------------------------------------
+    st.markdown("---")
     st.markdown("#### ⭐ 設定此事件的指標個案")
     case_options = {}
     for local_num, (idx, row) in enumerate(
